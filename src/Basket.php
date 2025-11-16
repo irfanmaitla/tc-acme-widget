@@ -38,8 +38,10 @@ class Basket
     {
         $subtotal = $this->calculateSubtotal();
         $deliveryCost = $this->deliveryRule->calculate($subtotal);
-
-        return round($subtotal + $deliveryCost, 2);
+        
+        // Convert to cents, add, then back to dollars
+        $totalCents = round($subtotal * 100) + round($deliveryCost * 100);
+        return $totalCents / 100;
     }
 
     private function calculateSubtotal(): float
@@ -49,8 +51,14 @@ class Basket
         foreach ($this->offers as $offer) {
             $productTotals = $offer->apply($productTotals, $this->items);
         }
-
-        return round(array_sum($productTotals), 2);
+        
+        // Work in cents to avoid floating point issues
+        $totalCents = 0;
+        foreach ($productTotals as $total) {
+            $totalCents += round($total * 100);
+        }
+        
+        return $totalCents / 100;
     }
 
     /**

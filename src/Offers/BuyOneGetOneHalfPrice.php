@@ -24,12 +24,15 @@ class BuyOneGetOneHalfPrice implements OfferInterface
         // Calculate how many items get the discount
         $discountedItems = intdiv($count, 2);
         
-        // Get the price per item
-        $pricePerItem = $productTotals[$this->productCode] / $count;
+        // Get the price per item in cents to avoid floating point issues
+        $totalCents = round($productTotals[$this->productCode] * 100);
+        $pricePerItemCents = round($totalCents / $count);
         
-        // Apply discount
-        $discount = $discountedItems * ($pricePerItem / 2);
-        $productTotals[$this->productCode] -= $discount;
+        // Apply discount: half price means divide by 2
+        $discountCents = $discountedItems * round($pricePerItemCents / 2);
+        
+        // Convert back to dollars
+        $productTotals[$this->productCode] = ($totalCents - $discountCents) / 100;
 
         return $productTotals;
     }
