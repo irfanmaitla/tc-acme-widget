@@ -1,0 +1,46 @@
+name: CI - Run PHPUnit Tests
+
+# Trigger the workflow on push and pull requests to main branch
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    # Run on Ubuntu latest
+    runs-on: ubuntu-latest
+    
+    steps:
+    # Step 1: Check out the repository code
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    # Step 2: Set up PHP
+    - name: Set up PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        extensions: mbstring, xml, ctype, json
+        coverage: xdebug
+    
+    # Step 3: Validate composer.json and composer.lock
+    - name: Validate Composer files
+      run: composer validate --strict
+    
+    # Step 4: Install dependencies
+    - name: Install dependencies
+      run: composer install --prefer-dist --no-progress --no-suggest
+    
+    # Step 5: Run PHPUnit tests
+    - name: Run PHPUnit tests
+      run: vendor/bin/phpunit
+    
+    # Optional: Upload test results
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: phpunit-results
+        path: tests/_output/
