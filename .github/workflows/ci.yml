@@ -60,7 +60,7 @@ jobs:
 
       # REQUIREMENT 4b: Upload HTML coverage report as artifact
       - name: Upload HTML coverage report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: coverage-report-html-${{ github.run_number }}
@@ -68,7 +68,7 @@ jobs:
           retention-days: 30
 
       - name: Upload coverage XML for analysis
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: coverage-report-xml-${{ github.run_number }}
@@ -129,7 +129,7 @@ jobs:
           fi
 
       - name: Upload diff coverage report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         if: steps.get_base.outputs.skip_diff != 'true'
         with:
           name: diff-coverage-report-${{ github.run_number }}
