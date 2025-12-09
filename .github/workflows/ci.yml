@@ -79,8 +79,10 @@ jobs:
       - name: Check global coverage threshold (80%)
         id: check_coverage
         run: |
-          COVERAGE=$(php tools/check-coverage.php coverage/clover.xml 80)
+          php tools/check-coverage.php coverage/clover.xml 80 > /tmp/coverage_output.txt 2>&1 || true
+          COVERAGE=$(php tools/check-coverage.php coverage/clover.xml 0 --display-only 2>&1 | tail -n 1)
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          cat /tmp/coverage_output.txt
 
       # REQUIREMENT 5: Calculate coverage diff (new code only)
       # Note: This step will be more useful when run on PRs

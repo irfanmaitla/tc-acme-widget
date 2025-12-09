@@ -220,16 +220,18 @@ function main($argv) {
     displayProgressBar($primaryCoverage);
     echo "\n";
     
-    // Output the coverage percentage for GitHub Actions
-    echo $primaryCoverage;
-    
-    // If display-only mode, exit successfully
+    // If display-only mode, output just the number and exit
     if ($displayOnly) {
+        // Output only the numeric value for GitHub Actions
+        echo number_format($primaryCoverage, 2);
         exit(0);
     }
     
     // Check threshold
     $passed = checkThreshold($coverage, $threshold);
+    
+    // Output the coverage percentage for GitHub Actions (last line)
+    echo "\n" . number_format($primaryCoverage, 2) . "\n";
     
     // Exit with appropriate code
     exit($passed ? 0 : 1);
