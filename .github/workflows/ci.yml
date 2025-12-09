@@ -11,19 +11,6 @@ permissions:
 jobs:
   test-coverage:
     runs-on: ubuntu-latest
-    
-    services:
-      mariadb:
-        image: mariadb:10.11
-        env:
-          MARIADB_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="healthcheck.sh --connect --innodb_initialized"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=3
 
     steps:
       - name: Checkout code
@@ -31,101 +18,32 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history for diff comparison
 
-      - name: Setup PHP 7.4 with PCOV
+      - name: Setup PHP 8.1 with PCOV
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '7.4'
+          php-version: '8.1'
           extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json, bcmath, zip
           tools: composer:v2
           coverage: pcov  # Enable PCOV for coverage
 
       - name: Install dependencies
-        run: composer install --prefer-dist --no-progress --no-suggest --optimize-autoloader
+        run: composer install --prefer-dist --no-progress --optimize-autoloader
 
-      - name: Wait for MariaDB
-        run: |
-          until nc -z 127.0.0.1 3306; do
-            echo "Waiting for MariaDB..."
-            sleep 2
-          done
-
-      - name: Doctrine proxies
-        run: |
-          cp config/cli-config-master.php config/cli-config.php
-          external/vendor/bin/doctrine orm:generate-proxies
-          cp config/cli-config-stats.php config/cli-config.php
-          external/vendor/bin/doctrine orm:generate-proxies
-          cp config/cli-config-tenant.php config/cli-config.php
-          external/vendor/bin/doctrine orm:generate-proxies
-        env:
-          DB_CONNECTION: mysql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_USERNAME: root
-          DB_PASSWORD: root
-          MASTER_HOST: 127.0.0.1
-          MASTER_PORT: 3306
-          MASTER_USERNAME: root
-          MASTER_PASSWORD: root
-          MASTER_DATABASE: tc_master
-          STATS_HOST: 127.0.0.1
-          STATS_PORT: 3306
-          STATS_USERNAME: root
-          STATS_PASSWORD: root
-          STATS_DATABASE: tc_stats
-          TENANT_HOST: 127.0.0.1
-          TENANT_PORT: 3306
-          TENANT_USERNAME: root
-          TENANT_PASSWORD: root
-          APP_ENV: test
-          APP_DEBUG: true
-
-      # Run unit tests with coverage (copied from ci-unit-test.yml)
+      # REQUIREMENT 3: Run unit tests with coverage
       - name: Run PHPUnit tests with coverage
         id: phpunit
         run: |
-          echo "Testing database before PHPUnit..."
-          mysql -h 127.0.0.1 -u root -proot -e "CREATE DATABASE IF NOT EXISTS tc_master;"
-          mysql -h 127.0.0.1 -u root -proot tc_master < db/test/master.sql
-          mysql -h 127.0.0.1 -u root -proot -e "USE tc_master; SHOW TABLES;" || echo "tc_master not found"
-          
           echo "Creating coverage directory..."
           mkdir -p coverage
           
           echo "Running PHPUnit with coverage..."
-          external/vendor/bin/phpunit \
-            --bootstrap test/bootstrap.php \
-            test/ \
-            -v \
+          vendor/bin/phpunit \
             --coverage-clover=coverage/clover.xml \
             --coverage-html=coverage/html \
             --coverage-text \
             --colors=always
-        env:
-          DB_CONNECTION: mysql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: tc_master
-          DB_USERNAME: root
-          DB_PASSWORD: root
-          MASTER_HOST: 127.0.0.1
-          MASTER_PORT: 3306
-          MASTER_USERNAME: root
-          MASTER_PASSWORD: root
-          MASTER_DATABASE: tc_master
-          STATS_HOST: 127.0.0.1
-          STATS_PORT: 3306
-          STATS_USERNAME: root
-          STATS_PASSWORD: root
-          STATS_DATABASE: tc_stats
-          TENANT_HOST: 127.0.0.1
-          TENANT_PORT: 3306
-          TENANT_USERNAME: root
-          TENANT_PASSWORD: root
-          APP_ENV: test
-          APP_DEBUG: true
 
-      # Print coverage report in console log
+      # REQUIREMENT 4a: Print coverage report in console log
       - name: Display coverage summary in log
         if: always()
         run: |
@@ -140,9 +58,9 @@ jobs:
           fi
           echo "=========================================="
 
-      # Upload HTML coverage report as artifact
+      # REQUIREMENT 4b: Upload HTML coverage report as artifact
       - name: Upload HTML coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: coverage-report-html-${{ github.run_number }}
@@ -150,7 +68,7 @@ jobs:
           retention-days: 30
 
       - name: Upload coverage XML for analysis
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         if: always()
         with:
           name: coverage-report-xml-${{ github.run_number }}
@@ -164,7 +82,8 @@ jobs:
           COVERAGE=$(php tools/check-coverage.php coverage/clover.xml 80)
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
 
-      # Calculate coverage diff (new code only)
+      # REQUIREMENT 5: Calculate coverage diff (new code only)
+      # Note: This step will be more useful when run on PRs
       - name: Get base branch for comparison
         id: get_base
         run: |
@@ -210,7 +129,7 @@ jobs:
           fi
 
       - name: Upload diff coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         if: steps.get_base.outputs.skip_diff != 'true'
         with:
           name: diff-coverage-report-${{ github.run_number }}
@@ -228,7 +147,7 @@ jobs:
           fi
           echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
 
-      # Set PR status check
+      # REQUIREMENT 2: Set PR status check (prevents merge if failed)
       - name: Set status check - Test Coverage Gate
         if: always()
         uses: actions/github-script@v6
