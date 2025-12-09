@@ -1,7 +1,7 @@
 name: CI Test Coverage
 
 on:
-  workflow_dispatch:  # Allows manual triggering
+  workflow_dispatch:  # Manual trigger only for now
 
 permissions:
   contents: read
@@ -36,7 +36,7 @@ jobs:
         with:
           php-version: '7.4'
           extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json, bcmath, zip
-          tools: composer:v2
+          tools: composer:v1
           coverage: pcov  # Enable PCOV for coverage
 
       - name: Install dependencies
@@ -80,7 +80,7 @@ jobs:
           APP_ENV: test
           APP_DEBUG: true
 
-      # Run unit tests with coverage
+      # Run unit tests with coverage (copied from ci-unit-test.yml)
       - name: Run PHPUnit tests with coverage
         id: phpunit
         run: |
@@ -228,7 +228,7 @@ jobs:
           fi
           echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
 
-      # Set PR status check (prevents merge if failed)
+      # Set PR status check
       - name: Set status check - Test Coverage Gate
         if: always()
         uses: actions/github-script@v6
@@ -315,14 +315,14 @@ jobs:
           echo "✅ All coverage checks passed!"
 
   # Optional: Slack notification
-  notify-failure:
-    runs-on: ubuntu-latest
-    needs: test-coverage
-    if: failure()
+  # notify-failure:
+  #   runs-on: ubuntu-latest
+  #   needs: test-coverage
+  #   if: failure()
     
-    steps:
-      - name: Send Slack notification
-        run: |
-          curl -X POST -H 'Content-type: application/json' --data '{
-            "text":"*Coverage Check Failure* :warning:\n*Repository:* `${{ github.repository }}`\n*Branch:* `${{ github.ref_name }}`\n*Workflow:* CI Test Coverage\n*Status:* :x: Coverage thresholds not met\n*Details:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
-          }' ${{ secrets.SLACK_BUILDBOT_WEBHOOK_URL }}
+  #   steps:
+  #     - name: Send Slack notification
+  #       run: |
+  #         curl -X POST -H 'Content-type: application/json' --data '{
+  #           "text":"*Coverage Check Failure* :warning:\n*Repository:* `${{ github.repository }}`\n*Branch:* `${{ github.ref_name }}`\n*Workflow:* CI Test Coverage\n*Status:* :x: Coverage thresholds not met\n*Details:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+  #         }' ${{ secrets.SLACK_BUILDBOT_WEBHOOK_URL }}
