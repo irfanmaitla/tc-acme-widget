@@ -270,7 +270,7 @@ function main($argv) {
     
     if (empty($changedLines)) {
         echo COLOR_YELLOW . "⚠️  No PHP files changed or no diff found" . COLOR_RESET . "\n";
-        echo "Diff coverage: N/A\n";
+        echo "N/A\\n";
         exit(0);
     }
     
@@ -296,7 +296,7 @@ function main($argv) {
     file_put_contents('coverage/diff-coverage.json', json_encode($jsonOutput, JSON_PRETTY_PRINT));
     
     // Output just the percentage for capture
-    echo $result['percentage'] . "\n";
+    echo number_format($result['percentage'], 2) . "\n";
     
     exit($passed ? 0 : 1);
 }

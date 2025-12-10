@@ -187,6 +187,8 @@ jobs:
           
           # Extract just the percentage from last line
           DIFF_COV=$(tail -n 1 /tmp/diff_output.txt)
+          # Clean up any trailing %
+          DIFF_COV=${DIFF_COV//\%/}  
           echo "diff_coverage_pct=$DIFF_COV" >> $GITHUB_OUTPUT
           
           # Show full output
@@ -222,9 +224,16 @@ jobs:
           retention-days: 30
 
       - name: Check diff coverage threshold
-        if: steps.get_base.outputs.skip_diff != 'true' && steps.diff_coverage.outputs.diff_coverage_pct != 'N/A'
+        if: steps.get_base.outputs.skip_diff != 'true'
         run: |
           DIFF_COV=${{ steps.diff_coverage.outputs.diff_coverage_pct }}
+
+          # Handle "N/A" explicitly
+          if [ "$DIFF_COV" == "N/A" ]; then
+            echo "Skipping threshold check: No new code changes."
+            exit 0
+          fi
+
           if (( $(echo "$DIFF_COV < 90" | bc -l) )); then
             echo "❌ BLOCKING: Diff coverage is $DIFF_COV% (threshold: 90%)"
             echo "DIFF_COVERAGE_FAILED=true" >> $GITHUB_ENV
