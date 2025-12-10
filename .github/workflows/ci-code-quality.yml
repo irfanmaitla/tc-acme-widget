@@ -38,7 +38,6 @@ jobs:
           
           echo "Running PHPUnit with coverage..."
           phpdbg -qrr vendor/bin/phpunit \
-            --whitelist ./src \
             --coverage-clover=coverage/clover.xml \
             --coverage-html=coverage/html \
             --coverage-text \
@@ -106,7 +105,6 @@ jobs:
           
           # Run tests on main (suppress output)
           phpdbg -qrr vendor/bin/phpunit \
-            --whitelist ./src \
             --coverage-clover=coverage/baseline-clover.xml \
             --no-logging \
             --colors=never > /dev/null 2>&1 || true
