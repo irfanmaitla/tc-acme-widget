@@ -92,6 +92,59 @@ jobs:
             echo "⚠️  WARNING: Global coverage is below 80% ($COVERAGE%)"
           fi
 
+      # Get baseline coverage from main branch for comparison
+      - name: Get baseline coverage from main
+        id: baseline_coverage
+        continue-on-error: true
+        run: |
+          # Fetch main branch
+          git fetch origin main:refs/remotes/origin/main || true
+          
+          # Checkout main and get its coverage
+          git checkout origin/main
+          composer install --prefer-dist --no-progress --optimize-autoloader --quiet || true
+          
+          # Run tests on main (suppress output)
+          vendor/bin/phpunit \
+            --coverage-clover=coverage/baseline-clover.xml \
+            --no-logging \
+            --colors=never > /dev/null 2>&1 || true
+          
+          if [ -f coverage/baseline-clover.xml ]; then
+            BASELINE_COV=$(php tools/check-coverage.php coverage/baseline-clover.xml 0 --display-only 2>&1 | tail -n 1)
+            echo "baseline_coverage=$BASELINE_COV" >> $GITHUB_OUTPUT
+            echo "Baseline coverage from main: $BASELINE_COV%"
+          else
+            echo "baseline_coverage=0" >> $GITHUB_OUTPUT
+            echo "Could not get baseline coverage"
+          fi
+          
+          # Switch back to current branch
+          git checkout -
+          composer install --prefer-dist --no-progress --optimize-autoloader --quiet
+
+      # Check if coverage decreased from main
+      - name: Check coverage decrease
+        id: coverage_decrease
+        run: |
+          CURRENT_COV=${{ steps.check_coverage.outputs.coverage }}
+          BASELINE_COV=${{ steps.baseline_coverage.outputs.baseline_coverage }}
+          
+          if [ "$BASELINE_COV" != "0" ]; then
+            if (( $(echo "$CURRENT_COV < $BASELINE_COV" | bc -l) )); then
+              DECREASE=$(echo "$BASELINE_COV - $CURRENT_COV" | bc -l)
+              echo "❌ BLOCKING: Coverage decreased by ${DECREASE}%"
+              echo "  Baseline (main): ${BASELINE_COV}%"
+              echo "  Current: ${CURRENT_COV}%"
+              echo "COVERAGE_DECREASED=true" >> $GITHUB_ENV
+              exit 1
+            else
+              echo "✅ Coverage maintained or improved"
+              echo "  Baseline (main): ${BASELINE_COV}%"
+              echo "  Current: ${CURRENT_COV}%"
+            fi
+          fi
+
       # REQUIREMENT 5: Calculate coverage diff (new code only)
       - name: Get base branch for comparison
         id: get_base
@@ -179,6 +232,21 @@ jobs:
           fi
           echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
 
+      # Check for coverage warnings (non-blocking)
+      - name: Check coverage warnings
+        id: coverage_warnings
+        continue-on-error: true
+        run: |
+          BASE_BRANCH="${{ steps.get_base.outputs.base_branch }}"
+          
+          echo "=== Checking for coverage warnings ==="
+          php tools/check-coverage-warnings.php coverage/clover.xml $BASE_BRANCH
+          
+          # Check if warnings file was created
+          if [ -f /tmp/coverage-warnings.json ]; then
+            echo "HAS_WARNINGS=true" >> $GITHUB_ENV
+          fi
+
       # Post coverage comment on PR
       - name: Comment coverage results on PR
         uses: marocchino/sticky-pull-request-comment@v2
@@ -191,16 +259,32 @@ jobs:
             **Global Coverage:** ${{ steps.check_coverage.outputs.coverage }}% 
             ${{ env.GLOBAL_COVERAGE_LOW == 'true' && '⚠️ *Below 80% threshold (WARNING ONLY)*' || '✅ *Meets 80% threshold*' }}
             
+            **Baseline Coverage (main):** ${{ steps.baseline_coverage.outputs.baseline_coverage }}%
+            ${{ env.COVERAGE_DECREASED == 'true' && '❌ **Coverage decreased - BLOCKING MERGE**' || '✅ *Coverage maintained/improved*' }}
+            
             **Diff Coverage (new code):** ${{ steps.diff_coverage.outputs.diff_coverage_pct }}% 
             ${{ env.DIFF_COVERAGE_FAILED == 'true' && '❌ **Below 90% threshold - BLOCKING MERGE**' || '✅ **Meets 90% threshold**' }}
             
             ---
             
             ### 📋 Coverage Rules
-            - **Global Coverage < 80%**: ⚠️ Warning only (does not block merge)
-            - **Diff Coverage < 90%**: ❌ **BLOCKS MERGE** (must be fixed)
+            
+            **Blocking Conditions (PR cannot merge):**
+            - ❌ Coverage decreased from main
+            - ❌ Diff coverage < 90%
+            - ❌ PHPUnit tests failing
+            
+            **Warning Conditions (does not block merge):**
+            - ⚠️ Global coverage < 80%
+            - ⚠️ Critical files < 70% coverage
+            - ⚠️ Public methods added without tests
+            - ⚠️ Large PR (500+ lines) with minimal tests
+            
+            ${{ env.HAS_WARNINGS == 'true' && '### ⚠️ Coverage Warnings Detected\nSee workflow logs for details on specific warnings.' || '' }}
             
             ${{ env.DIFF_COVERAGE_FAILED == 'true' && '### ❌ Action Required\nYour new code coverage is below 90%. Please add more unit tests for the changed/added code before this PR can be merged.' || '' }}
+            
+            ${{ env.COVERAGE_DECREASED == 'true' && '### ❌ Action Required\nOverall coverage has decreased. Please add tests to restore or improve coverage levels.' || '' }}
             
             ### 📥 Download Reports
             - [HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
@@ -216,20 +300,31 @@ jobs:
         with:
           script: |
             const globalCoverage = '${{ steps.check_coverage.outputs.coverage }}';
+            const baselineCoverage = '${{ steps.baseline_coverage.outputs.baseline_coverage }}';
             const diffCoverage = '${{ steps.diff_coverage.outputs.diff_coverage_pct }}';
             const globalCoverageLow = process.env.GLOBAL_COVERAGE_LOW === 'true';
+            const coverageDecreased = process.env.COVERAGE_DECREASED === 'true';
             const diffCoverageFailed = process.env.DIFF_COVERAGE_FAILED === 'true';
             const testsFailed = '${{ steps.phpunit.outcome }}' !== 'success';
             const skipDiff = '${{ steps.get_base.outputs.skip_diff }}' === 'true';
+            const hasWarnings = process.env.HAS_WARNINGS === 'true';
             
             let conclusion = 'success';
             let summary = '';
             let details = '';
             
+            // Determine blocking failures
             if (testsFailed) {
               conclusion = 'failure';
               summary = '❌ Unit tests failed';
               details = 'Some unit tests are failing. Please fix the failing tests before merge.';
+            } else if (coverageDecreased) {
+              conclusion = 'failure';
+              summary = '❌ Coverage decreased from main - BLOCKING MERGE';
+              details = `Coverage regression detected:\n`;
+              details += `- Baseline (main): ${baselineCoverage}%\n`;
+              details += `- Current: ${globalCoverage}%\n\n`;
+              details += 'Please add tests to restore or improve coverage.';
             } else if (diffCoverageFailed) {
               conclusion = 'failure';
               summary = `❌ Diff coverage below 90% threshold - BLOCKING MERGE`;
@@ -238,12 +333,16 @@ jobs:
               details += 'Please add unit tests for your new/changed code to reach 90% coverage.';
             } else {
               conclusion = 'success';
-              summary = '✅ Coverage requirements met';
-              details = `Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% threshold - warning only)' : '(✅ meets 80% threshold)'}\n`;
+              summary = '✅ All coverage requirements met';
+              details = `✅ All blocking checks passed:\n`;
+              details += `- Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% - warning only)' : '(✅ meets 80%)'}\n`;
+              details += `- Coverage vs main: ${baselineCoverage}% → ${globalCoverage}% (✅ maintained/improved)\n`;
               if (!skipDiff && diffCoverage !== 'N/A') {
-                details += `Diff coverage: ${diffCoverage}% (✅ meets 90% threshold)\n`;
+                details += `- Diff coverage: ${diffCoverage}% (✅ meets 90%)\n`;
               }
-              details += '\nAll coverage checks passed. PR can be merged.';
+              if (hasWarnings) {
+                details += `\n⚠️ Note: There are coverage warnings (non-blocking). See workflow logs for details.`;
+              }
             }
             
             await github.rest.checks.create({
@@ -305,10 +404,25 @@ jobs:
           echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo ""
 
-      # Final step: Fail the job ONLY if diff coverage is below 90%
+      # Final step: Fail the job for blocking conditions only
       - name: Final coverage check
         if: always()
         run: |
+          BLOCKING_FAILURE=false
+          
+          # Check blocking conditions
+          if [ "${{ env.COVERAGE_DECREASED }}" == "true" ]; then
+            echo ""
+            echo "❌ MERGE BLOCKED: Coverage decreased from main"
+            echo ""
+            echo "Baseline (main): ${{ steps.baseline_coverage.outputs.baseline_coverage }}%"
+            echo "Current: ${{ steps.check_coverage.outputs.coverage }}%"
+            echo ""
+            echo "Please add tests to restore coverage to previous levels."
+            echo ""
+            BLOCKING_FAILURE=true
+          fi
+          
           if [ "${{ env.DIFF_COVERAGE_FAILED }}" == "true" ]; then
             echo ""
             echo "❌ MERGE BLOCKED: Diff coverage below 90%"
@@ -321,15 +435,32 @@ jobs:
             echo ""
             echo "Check the diff coverage report for specific uncovered lines."
             echo ""
-            exit 1
+            BLOCKING_FAILURE=true
           fi
           
+          # Show warnings (non-blocking)
           if [ "${{ env.GLOBAL_COVERAGE_LOW }}" == "true" ]; then
             echo ""
             echo "⚠️  WARNING: Global coverage is below 80%"
             echo "This is a warning only and does not block merge."
             echo "However, please consider improving overall test coverage."
             echo ""
+          fi
+          
+          if [ "${{ env.HAS_WARNINGS }}" == "true" ]; then
+            echo ""
+            echo "⚠️  Additional coverage warnings detected (non-blocking):"
+            echo "   • Critical files may have low coverage"
+            echo "   • Public methods may lack test coverage"
+            echo "   • Large PR may need more tests"
+            echo ""
+            echo "See detailed warnings in the 'Check coverage warnings' step above."
+            echo ""
+          fi
+          
+          # Exit with failure only if blocking conditions exist
+          if [ "$BLOCKING_FAILURE" == "true" ]; then
+            exit 1
           fi
           
           echo "✅ All blocking coverage checks passed!"
