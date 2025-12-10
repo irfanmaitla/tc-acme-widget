@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress --optimize-autoloader
 
-      # REQUIREMENT 3: Run unit tests with coverage
+      # Run unit tests with coverage
       - name: Run PHPUnit tests with coverage
         id: phpunit
         run: |
@@ -38,15 +38,13 @@ jobs:
           mkdir -p coverage
           
           echo "Running PHPUnit with coverage..."
-          PCOV_ENABLED=1 php -d pcov.enabled=1 external/vendor/bin/phpunit \
+          vendor/bin/phpunit \
             --coverage-clover=coverage/clover.xml \
             --coverage-html=coverage/html \
             --coverage-text \
             --colors=always
-        env:
-          PCOV_ENABLED: 1
 
-      # REQUIREMENT 4a: Print coverage report in console log
+      # Print coverage report in console log
       - name: Display coverage summary in log
         if: always()
         run: |
@@ -61,7 +59,7 @@ jobs:
           fi
           echo "=========================================="
 
-      # REQUIREMENT 4b: Upload HTML coverage report as artifact
+      # Upload HTML coverage report as artifact
       - name: Upload HTML coverage report
         uses: actions/upload-artifact@v4
         if: always()
@@ -107,7 +105,7 @@ jobs:
           composer install --prefer-dist --no-progress --optimize-autoloader --quiet || true
           
           # Run tests on main (suppress output)
-          external/vendor/bin/phpunit \
+          vendor/bin/phpunit \
             --coverage-clover=coverage/baseline-clover.xml \
             --no-logging \
             --colors=never > /dev/null 2>&1 || true
@@ -147,7 +145,7 @@ jobs:
             fi
           fi
 
-      # REQUIREMENT 5: Calculate coverage diff (new code only)
+      # Calculate coverage diff (new code only)
       - name: Get base branch for comparison
         id: get_base
         run: |
@@ -304,7 +302,7 @@ jobs:
             ---
             *Coverage reports are available in the workflow artifacts for 30 days*
 
-      # REQUIREMENT 2: Set PR status check (prevents merge if failed)
+      # Set PR status check (prevents merge if failed)
       - name: Set PR status check - Test Coverage Gate
         if: always()
         uses: actions/github-script@v6
