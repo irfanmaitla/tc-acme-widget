@@ -2,6 +2,7 @@ name: CI Test Coverage
 
 on:
   workflow_dispatch:  # Manual trigger only for now
+  pull_request:
 
 permissions:
   contents: read
