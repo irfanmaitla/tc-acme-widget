@@ -1,0 +1,475 @@
+name: CI Code Quality
+
+on:
+  workflow_dispatch:  # Manual trigger only for now
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for diff comparison
+
+      - name: Setup PHP 8.1 with PCOV
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json, bcmath, zip
+          tools: composer:v2
+          coverage: pcov  # Enable PCOV for coverage
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-progress --optimize-autoloader
+
+      # REQUIREMENT 3: Run unit tests with coverage
+      - name: Run PHPUnit tests with coverage
+        id: phpunit
+        run: |
+          echo "Creating coverage directory..."
+          mkdir -p coverage
+          
+          echo "Running PHPUnit with coverage..."
+          vendor/bin/phpunit \
+            --coverage-clover=coverage/clover.xml \
+            --coverage-html=coverage/html \
+            --coverage-text \
+            --colors=always
+
+      # REQUIREMENT 4a: Print coverage report in console log
+      - name: Display coverage summary in log
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "         COVERAGE SUMMARY"
+          echo "=========================================="
+          if [ -f coverage/clover.xml ]; then
+            php tools/check-coverage.php coverage/clover.xml 0 --display-only
+          else
+            echo "❌ Coverage report not found"
+            exit 1
+          fi
+          echo "=========================================="
+
+      # REQUIREMENT 4b: Upload HTML coverage report as artifact
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-html-${{ github.run_number }}
+          path: coverage/html/
+          retention-days: 30
+
+      - name: Upload coverage XML for analysis
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report-xml-${{ github.run_number }}
+          path: coverage/clover.xml
+          retention-days: 30
+
+      # Check global coverage threshold (80%)
+      - name: Check global coverage threshold (80%)
+        id: check_coverage
+        continue-on-error: true  # Don't fail on low global coverage
+        run: |
+          php tools/check-coverage.php coverage/clover.xml 80 > /tmp/coverage_output.txt 2>&1 || true
+          COVERAGE=$(php tools/check-coverage.php coverage/clover.xml 0 --display-only 2>&1 | tail -n 1)
+          echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+          cat /tmp/coverage_output.txt
+          
+          # Check if below 80% for warning
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "GLOBAL_COVERAGE_LOW=true" >> $GITHUB_ENV
+            echo "⚠️  WARNING: Global coverage is below 80% ($COVERAGE%)"
+          fi
+
+      # Get baseline coverage from main branch for comparison
+      - name: Get baseline coverage from main
+        id: baseline_coverage
+        continue-on-error: true
+        run: |
+          # Fetch main branch
+          git fetch origin main:refs/remotes/origin/main || true
+          
+          # Checkout main and get its coverage
+          git checkout origin/main
+          composer install --prefer-dist --no-progress --optimize-autoloader --quiet || true
+          
+          # Run tests on main (suppress output)
+          vendor/bin/phpunit \
+            --coverage-clover=coverage/baseline-clover.xml \
+            --no-logging \
+            --colors=never > /dev/null 2>&1 || true
+          
+          if [ -f coverage/baseline-clover.xml ]; then
+            BASELINE_COV=$(php tools/check-coverage.php coverage/baseline-clover.xml 0 --display-only 2>&1 | tail -n 1)
+            echo "baseline_coverage=$BASELINE_COV" >> $GITHUB_OUTPUT
+            echo "Baseline coverage from main: $BASELINE_COV%"
+          else
+            echo "baseline_coverage=0" >> $GITHUB_OUTPUT
+            echo "Could not get baseline coverage"
+          fi
+          
+          # Switch back to current branch
+          git checkout -
+          composer install --prefer-dist --no-progress --optimize-autoloader --quiet
+
+      # Check if coverage decreased from main
+      - name: Check coverage decrease
+        id: coverage_decrease
+        run: |
+          CURRENT_COV=${{ steps.check_coverage.outputs.coverage }}
+          BASELINE_COV=${{ steps.baseline_coverage.outputs.baseline_coverage }}
+          
+          if [ "$BASELINE_COV" != "0" ]; then
+            if (( $(echo "$CURRENT_COV < $BASELINE_COV" | bc -l) )); then
+              DECREASE=$(echo "$BASELINE_COV - $CURRENT_COV" | bc -l)
+              echo "❌ BLOCKING: Coverage decreased by ${DECREASE}%"
+              echo "  Baseline (main): ${BASELINE_COV}%"
+              echo "  Current: ${CURRENT_COV}%"
+              echo "COVERAGE_DECREASED=true" >> $GITHUB_ENV
+              exit 1
+            else
+              echo "✅ Coverage maintained or improved"
+              echo "  Baseline (main): ${BASELINE_COV}%"
+              echo "  Current: ${CURRENT_COV}%"
+            fi
+          fi
+
+      # REQUIREMENT 5: Calculate coverage diff (new code only)
+      - name: Get base branch for comparison
+        id: get_base
+        run: |
+          # Determine base branch
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_BRANCH="${{ github.base_ref }}"
+            echo "base_branch=$BASE_BRANCH" >> $GITHUB_OUTPUT
+            echo "skip_diff=false" >> $GITHUB_OUTPUT
+            echo "Using PR base branch: $BASE_BRANCH"
+          else
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            echo "current_branch=$CURRENT_BRANCH" >> $GITHUB_OUTPUT
+            
+            if [[ "$CURRENT_BRANCH" == "main" ]]; then
+              echo "base_branch=main" >> $GITHUB_OUTPUT
+              echo "skip_diff=true" >> $GITHUB_OUTPUT
+              echo "On main branch, skipping diff coverage"
+            else
+              echo "base_branch=main" >> $GITHUB_OUTPUT
+              echo "skip_diff=false" >> $GITHUB_OUTPUT
+              echo "Using default base branch: main"
+            fi
+          fi
+
+      - name: Calculate diff coverage for changed code
+        id: diff_coverage
+        if: steps.get_base.outputs.skip_diff != 'true'
+        continue-on-error: true
+        run: |
+          BASE_BRANCH="${{ steps.get_base.outputs.base_branch }}"
+          
+          # Fetch the base branch
+          echo "Fetching base branch: $BASE_BRANCH"
+          git fetch origin $BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH || true
+          
+          # Use custom PHP script to calculate diff coverage
+          echo "=== Calculating diff coverage using custom script ==="
+          php tools/calculate-diff-coverage.php coverage/clover.xml origin/$BASE_BRANCH 90 > /tmp/diff_output.txt 2>&1 || echo "DIFF_FAILED=true" >> $GITHUB_ENV
+          
+          # Extract just the percentage from last line
+          DIFF_COV=$(tail -n 1 /tmp/diff_output.txt)
+          # Clean up any trailing %
+          DIFF_COV=${DIFF_COV//\%/}  
+          echo "diff_coverage_pct=$DIFF_COV" >> $GITHUB_OUTPUT
+          
+          # Show full output
+          cat /tmp/diff_output.txt
+          
+          # Create simple HTML report
+          cat > coverage/diff-coverage.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Diff Coverage Report</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  .pass { color: green; font-weight: bold; }
+                  .fail { color: red; font-weight: bold; }
+                  pre { background: #f4f4f4; padding: 10px; border-radius: 5px; }
+              </style>
+          </head>
+          <body>
+              <h1>Diff Coverage Report</h1>
+              <h2>Coverage: ${DIFF_COV}%</h2>
+              <pre>$(cat /tmp/diff_output.txt)</pre>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload diff coverage report
+        uses: actions/upload-artifact@v4
+        if: steps.get_base.outputs.skip_diff != 'true'
+        with:
+          name: diff-coverage-report-${{ github.run_number }}
+          path: coverage/diff-coverage.html
+          retention-days: 30
+
+      - name: Check diff coverage threshold
+        if: steps.get_base.outputs.skip_diff != 'true'
+        run: |
+          DIFF_COV=${{ steps.diff_coverage.outputs.diff_coverage_pct }}
+
+          # Handle "N/A" explicitly
+          if [ "$DIFF_COV" == "N/A" ]; then
+            echo "Skipping threshold check: No new code changes."
+            exit 0
+          fi
+
+          if (( $(echo "$DIFF_COV < 90" | bc -l) )); then
+            echo "❌ BLOCKING: Diff coverage is $DIFF_COV% (threshold: 90%)"
+            echo "DIFF_COVERAGE_FAILED=true" >> $GITHUB_ENV
+            exit 1
+          fi
+          echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
+
+      # Check for coverage warnings (non-blocking)
+      - name: Check coverage warnings
+        id: coverage_warnings
+        continue-on-error: true
+        run: |
+          BASE_BRANCH="${{ steps.get_base.outputs.base_branch }}"
+          
+          echo "=== Checking for coverage warnings ==="
+          php tools/check-coverage-warnings.php coverage/clover.xml $BASE_BRANCH
+          
+          # Check if warnings file was created
+          if [ -f /tmp/coverage-warnings.json ]; then
+            echo "HAS_WARNINGS=true" >> $GITHUB_ENV
+          fi
+
+      # Post coverage comment on PR
+      - name: Comment coverage results on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request' && always()
+        with:
+          header: coverage
+          message: |
+            ## 📊 Coverage Report
+            
+            **Global Coverage:** ${{ steps.check_coverage.outputs.coverage }}% 
+            ${{ env.GLOBAL_COVERAGE_LOW == 'true' && '⚠️ *Below 80% threshold (WARNING ONLY)*' || '✅ *Meets 80% threshold*' }}
+            
+            **Baseline Coverage (main):** ${{ steps.baseline_coverage.outputs.baseline_coverage }}%
+            ${{ env.COVERAGE_DECREASED == 'true' && '❌ **Coverage decreased - BLOCKING MERGE**' || '✅ *Coverage maintained/improved*' }}
+            
+            **Diff Coverage (new code):** ${{ steps.diff_coverage.outputs.diff_coverage_pct }}% 
+            ${{ steps.diff_coverage.outputs.diff_coverage_pct == 'N/A' && '*Not Applicable (No code changes)*' || env.DIFF_COVERAGE_FAILED == 'true' && '❌ **Below 90% threshold - BLOCKING MERGE**' || '✅ **Meets 90% threshold**' }}
+            
+            ---
+            
+            ### 📋 Coverage Rules
+            
+            **Blocking Conditions (PR cannot merge):**
+            - ❌ Coverage decreased from main
+            - ❌ Diff coverage < 90%
+            - ❌ PHPUnit tests failing
+            
+            **Warning Conditions (does not block merge):**
+            - ⚠️ Global coverage < 80%
+            - ⚠️ Critical files < 70% coverage
+            - ⚠️ Public methods added without tests
+            - ⚠️ Large PR (500+ lines) with minimal tests
+            
+            ${{ env.HAS_WARNINGS == 'true' && '### ⚠️ Coverage Warnings Detected - See workflow logs for details on specific warnings.' || '' }}
+            
+            ${{ env.DIFF_COVERAGE_FAILED == 'true' && '### ❌ Action Required - Your new code coverage is below 90%. Please add more unit tests for the changed/added code before this PR can be merged.' || '' }}
+            
+            ${{ env.COVERAGE_DECREASED == 'true' && '### ❌ Action Required - Overall coverage has decreased. Please add tests to restore or improve coverage levels.' || '' }}
+            
+            ### 📥 Download Reports
+            - [HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [Diff Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            ---
+            *Coverage reports are available in the workflow artifacts for 30 days*
+
+      # REQUIREMENT 2: Set PR status check (prevents merge if failed)
+      - name: Set PR status check - Test Coverage Gate
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const globalCoverage = '${{ steps.check_coverage.outputs.coverage }}';
+            const baselineCoverage = '${{ steps.baseline_coverage.outputs.baseline_coverage }}';
+            const diffCoverage = '${{ steps.diff_coverage.outputs.diff_coverage_pct }}';
+            const globalCoverageLow = process.env.GLOBAL_COVERAGE_LOW === 'true';
+            const coverageDecreased = process.env.COVERAGE_DECREASED === 'true';
+            const diffCoverageFailed = process.env.DIFF_COVERAGE_FAILED === 'true';
+            const testsFailed = '${{ steps.phpunit.outcome }}' !== 'success';
+            const skipDiff = '${{ steps.get_base.outputs.skip_diff }}' === 'true';
+            const hasWarnings = process.env.HAS_WARNINGS === 'true';
+            
+            let conclusion = 'success';
+            let summary = '';
+            let details = '';
+            
+            // Determine blocking failures
+            if (testsFailed) {
+              conclusion = 'failure';
+              summary = '❌ Unit tests failed';
+              details = 'Some unit tests are failing. Please fix the failing tests before merge.';
+            } else if (coverageDecreased) {
+              conclusion = 'failure';
+              summary = '❌ Coverage decreased from main - BLOCKING MERGE';
+              details = `Coverage regression detected:\n`;
+              details += `- Baseline (main): ${baselineCoverage}%\n`;
+              details += `- Current: ${globalCoverage}%\n\n`;
+              details += 'Please add tests to restore or improve coverage.';
+            } else if (diffCoverageFailed) {
+              conclusion = 'failure';
+              summary = `❌ Diff coverage below 90% threshold - BLOCKING MERGE`;
+              details = `New/changed code coverage: ${diffCoverage}% (required: 90%)\n\n`;
+              details += `Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% - warning only)' : '(✅ meets 80%)'}\n\n`;
+              details += 'Please add unit tests for your new/changed code to reach 90% coverage.';
+            } else {
+              conclusion = 'success';
+              summary = '✅ All coverage requirements met';
+              details = `✅ All blocking checks passed:\n`;
+              details += `- Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% - warning only)' : '(✅ meets 80%)'}\n`;
+              details += `- Coverage vs main: ${baselineCoverage}% → ${globalCoverage}% (✅ maintained/improved)\n`;
+              if (!skipDiff && diffCoverage !== 'N/A') {
+                details += `- Diff coverage: ${diffCoverage}% (✅ meets 90%)\n`;
+              }
+              if (hasWarnings) {
+                details += `\n⚠️ Note: There are coverage warnings (non-blocking). See workflow logs for details.`;
+              }
+            }
+            
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Test Coverage Gate',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: conclusion,
+              output: {
+                title: 'Test Coverage Check',
+                summary: summary,
+                text: details
+              }
+            });
+
+      # Post results summary
+      - name: Coverage Results Summary
+        if: always()
+        run: |
+          echo ""
+          echo "========================================"
+          echo "       COVERAGE CHECK RESULTS"
+          echo "========================================"
+          echo ""
+          echo "Global Coverage: ${{ steps.check_coverage.outputs.coverage }}%"
+          
+          if [ "${{ env.GLOBAL_COVERAGE_LOW }}" == "true" ]; then
+            echo "  ⚠️  WARNING: Below 80% threshold (does not block merge)"
+          else
+            echo "  ✅ Meets 80% threshold"
+          fi
+          
+          if [ "${{ steps.get_base.outputs.skip_diff }}" != "true" ] && [ "${{ steps.diff_coverage.outputs.diff_coverage_pct }}" != "N/A" ]; then
+            echo ""
+            echo "Diff Coverage (new code): ${{ steps.diff_coverage.outputs.diff_coverage_pct }}%"
+            if [ "${{ env.DIFF_COVERAGE_FAILED }}" == "true" ]; then
+              echo "  ❌ BLOCKING: Below 90% threshold - PR cannot be merged"
+            else
+              echo "  ✅ Meets 90% threshold"
+            fi
+          fi
+          
+          echo ""
+          echo "Coverage Rules:"
+          echo "  • Global < 80%: ⚠️  Warning only"
+          echo "  • Diff < 90%: ❌ Blocks merge"
+          echo ""
+          echo "Artifacts available:"
+          echo "  - HTML Coverage Report (coverage-report-html-${{ github.run_number }})"
+          echo "  - XML Coverage Report (coverage-report-xml-${{ github.run_number }})"
+          
+          if [ "${{ steps.get_base.outputs.skip_diff }}" != "true" ]; then
+            echo "  - Diff Coverage Report (diff-coverage-report-${{ github.run_number }})"
+          fi
+          
+          echo ""
+          echo "Download artifacts from:"
+          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+
+      # Final step: Fail the job for blocking conditions only
+      - name: Final coverage check
+        if: always()
+        run: |
+          BLOCKING_FAILURE=false
+          
+          # Check blocking conditions
+          if [ "${{ env.COVERAGE_DECREASED }}" == "true" ]; then
+            echo ""
+            echo "❌ MERGE BLOCKED: Coverage decreased from main"
+            echo ""
+            echo "Baseline (main): ${{ steps.baseline_coverage.outputs.baseline_coverage }}%"
+            echo "Current: ${{ steps.check_coverage.outputs.coverage }}%"
+            echo ""
+            echo "Please add tests to restore coverage to previous levels."
+            echo ""
+            BLOCKING_FAILURE=true
+          fi
+          
+          if [ "${{ env.DIFF_COVERAGE_FAILED }}" == "true" ]; then
+            echo ""
+            echo "❌ MERGE BLOCKED: Diff coverage below 90%"
+            echo ""
+            echo "Your new/changed code has less than 90% test coverage."
+            echo "Please add unit tests for the following:"
+            echo "  • New methods/functions you added"
+            echo "  • Modified code logic"
+            echo "  • Edge cases and error handling"
+            echo ""
+            echo "Check the diff coverage report for specific uncovered lines."
+            echo ""
+            BLOCKING_FAILURE=true
+          fi
+          
+          # Show warnings (non-blocking)
+          if [ "${{ env.GLOBAL_COVERAGE_LOW }}" == "true" ]; then
+            echo ""
+            echo "⚠️  WARNING: Global coverage is below 80%"
+            echo "This is a warning only and does not block merge."
+            echo "However, please consider improving overall test coverage."
+            echo ""
+          fi
+          
+          if [ "${{ env.HAS_WARNINGS }}" == "true" ]; then
+            echo ""
+            echo "⚠️  Additional coverage warnings detected (non-blocking):"
+            echo "   • Critical files may have low coverage"
+            echo "   • Public methods may lack test coverage"
+            echo "   • Large PR may need more tests"
+            echo ""
+            echo "See detailed warnings in the 'Check coverage warnings' step above."
+            echo ""
+          fi
+          
+          # Exit with failure only if blocking conditions exist
+          if [ "$BLOCKING_FAILURE" == "true" ]; then
+            exit 1
+          fi
+          
+          echo "✅ All blocking coverage checks passed!"
