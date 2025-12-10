@@ -67,8 +67,8 @@ function getChangedLines($baseBranch) {
         // Match file path: +++ b/path/to/file.php
         if (preg_match('/^\+\+\+ b\/(.+)$/', $line, $matches)) {
             $currentFile = $matches[1];
-            // Only track PHP files
-            if (!preg_match('/\.php$/', $currentFile)) {
+            // Only track PHP files AND EXCLUDE FILES in 'tools/' directory
+            if (!preg_match('/\.php$/', $currentFile) || strpos($currentFile, 'tools/') === 0) {
                 $currentFile = null;
             }
             continue;
