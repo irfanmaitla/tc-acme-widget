@@ -271,8 +271,8 @@ jobs:
             **Baseline Coverage (main):** ${{ steps.baseline_coverage.outputs.baseline_coverage }}%
             ${{ env.COVERAGE_DECREASED == 'true' && '❌ **Coverage decreased - BLOCKING MERGE**' || '✅ *Coverage maintained/improved*' }}
             
-            **Diff Coverage (new code):** ${{ steps.diff_coverage.outputs.diff_coverage_pct }}% 
-            ${{ steps.diff_coverage.outputs.diff_coverage_pct == 'N/A' && '*Not Applicable (No code changes)*' || env.DIFF_COVERAGE_FAILED == 'true' && '❌ **Below 90% threshold - BLOCKING MERGE**' || '✅ **Meets 90% threshold**' }}
+            **Diff Coverage (new code):** ${{ steps.diff_coverage.outputs.diff_coverage_pct }}${{ steps.diff_coverage.outputs.diff_coverage_pct != 'N/A' && steps.diff_coverage.outputs.diff_coverage_pct != '' && '%' || '' }}
+            ${{ (steps.diff_coverage.outputs.diff_coverage_pct == 'N/A' || steps.diff_coverage.outputs.diff_coverage_pct == '') && '*Not Applicable (N/A or Skipped)*' || env.DIFF_COVERAGE_FAILED == 'true' && '❌ **Below 90% threshold - BLOCKING MERGE**' || '✅ **Meets 90% threshold**' }}
             
             ---
             
