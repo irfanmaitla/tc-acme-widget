@@ -79,11 +79,18 @@ jobs:
       # Check global coverage threshold (80%)
       - name: Check global coverage threshold (80%)
         id: check_coverage
+        continue-on-error: true  # Don't fail on low global coverage
         run: |
           php tools/check-coverage.php coverage/clover.xml 80 > /tmp/coverage_output.txt 2>&1 || true
           COVERAGE=$(php tools/check-coverage.php coverage/clover.xml 0 --display-only 2>&1 | tail -n 1)
           echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
           cat /tmp/coverage_output.txt
+          
+          # Check if below 80% for warning
+          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
+            echo "GLOBAL_COVERAGE_LOW=true" >> $GITHUB_ENV
+            echo "⚠️  WARNING: Global coverage is below 80% ($COVERAGE%)"
+          fi
 
       # REQUIREMENT 5: Calculate coverage diff (new code only)
       # Note: This step will be more useful when run on PRs
@@ -144,8 +151,8 @@ jobs:
         run: |
           DIFF_COV=${{ steps.diff_coverage.outputs.diff_coverage_pct }}
           if (( $(echo "$DIFF_COV < 90" | bc -l) )); then
-            echo "❌ Diff coverage is $DIFF_COV% (threshold: 90%)"
-            echo "COVERAGE_FAILED=true" >> $GITHUB_ENV
+            echo "❌ BLOCKING: Diff coverage is $DIFF_COV% (threshold: 90%)"
+            echo "DIFF_COVERAGE_FAILED=true" >> $GITHUB_ENV
             exit 1
           fi
           echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
@@ -206,12 +213,28 @@ jobs:
           echo "       COVERAGE CHECK RESULTS"
           echo "========================================"
           echo ""
-          echo "Global Coverage: ${{ steps.check_coverage.outputs.coverage }}% (threshold: 80%)"
+          echo "Global Coverage: ${{ steps.check_coverage.outputs.coverage }}%"
           
-          if [ "${{ steps.get_base.outputs.skip_diff }}" != "true" ] && [ "${{ steps.diff_coverage.outputs.diff_coverage_pct }}" != "N/A" ]; then
-            echo "Diff Coverage: ${{ steps.diff_coverage.outputs.diff_coverage_pct }}% (threshold: 90%)"
+          if [ "${{ env.GLOBAL_COVERAGE_LOW }}" == "true" ]; then
+            echo "  ⚠️  WARNING: Below 80% threshold (does not block merge)"
+          else
+            echo "  ✅ Meets 80% threshold"
           fi
           
+          if [ "${{ steps.get_base.outputs.skip_diff }}" != "true" ] && [ "${{ steps.diff_coverage.outputs.diff_coverage_pct }}" != "N/A" ]; then
+            echo ""
+            echo "Diff Coverage (new code): ${{ steps.diff_coverage.outputs.diff_coverage_pct }}%"
+            if [ "${{ env.DIFF_COVERAGE_FAILED }}" == "true" ]; then
+              echo "  ❌ BLOCKING: Below 90% threshold - PR cannot be merged"
+            else
+              echo "  ✅ Meets 90% threshold"
+            fi
+          fi
+          
+          echo ""
+          echo "Coverage Rules:"
+          echo "  • Global < 80%: ⚠️  Warning only"
+          echo "  • Diff < 90%: ❌ Blocks merge"
           echo ""
           echo "Artifacts available:"
           echo "  - HTML Coverage Report (coverage-report-html-${{ github.run_number }})"
@@ -226,15 +249,34 @@ jobs:
           echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo ""
 
-      # Final step: Fail the job if coverage thresholds not met
+      # Final step: Fail the job ONLY if diff coverage is below 90%
       - name: Final coverage check
         if: always()
         run: |
-          if [ "${{ env.COVERAGE_FAILED }}" == "true" ]; then
-            echo "❌ Coverage checks failed. Please review the coverage reports and add more tests."
+          if [ "${{ env.DIFF_COVERAGE_FAILED }}" == "true" ]; then
+            echo ""
+            echo "❌ MERGE BLOCKED: Diff coverage below 90%"
+            echo ""
+            echo "Your new/changed code has less than 90% test coverage."
+            echo "Please add unit tests for the following:"
+            echo "  • New methods/functions you added"
+            echo "  • Modified code logic"
+            echo "  • Edge cases and error handling"
+            echo ""
+            echo "Check the diff coverage report for specific uncovered lines."
+            echo ""
             exit 1
           fi
-          echo "✅ All coverage checks passed!"
+          
+          if [ "${{ env.GLOBAL_COVERAGE_LOW }}" == "true" ]; then
+            echo ""
+            echo "⚠️  WARNING: Global coverage is below 80%"
+            echo "This is a warning only and does not block merge."
+            echo "However, please consider improving overall test coverage."
+            echo ""
+          fi
+          
+          echo "✅ All blocking coverage checks passed!"
 
   # Optional: Slack notification
   # notify-failure:
