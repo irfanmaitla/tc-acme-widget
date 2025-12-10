@@ -38,11 +38,13 @@ jobs:
           mkdir -p coverage
           
           echo "Running PHPUnit with coverage..."
-          external/vendor/bin/phpunit \
+          PCOV_ENABLED=1 php -d pcov.enabled=1 external/vendor/bin/phpunit \
             --coverage-clover=coverage/clover.xml \
             --coverage-html=coverage/html \
             --coverage-text \
             --colors=always
+        env:
+          PCOV_ENABLED: 1
 
       # REQUIREMENT 4a: Print coverage report in console log
       - name: Display coverage summary in log
