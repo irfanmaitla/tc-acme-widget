@@ -289,11 +289,11 @@ jobs:
             - ⚠️ Public methods added without tests
             - ⚠️ Large PR (500+ lines) with minimal tests
             
-            ${{ env.HAS_WARNINGS == 'true' && '### ⚠️ Coverage Warnings Detected\nSee workflow logs for details on specific warnings.' || '' }}
+            ${{ env.HAS_WARNINGS == 'true' && '### ⚠️ Coverage Warnings Detected - See workflow logs for details on specific warnings.' || '' }}
             
-            ${{ env.DIFF_COVERAGE_FAILED == 'true' && '### ❌ Action Required\nYour new code coverage is below 90%. Please add more unit tests for the changed/added code before this PR can be merged.' || '' }}
+            ${{ env.DIFF_COVERAGE_FAILED == 'true' && '### ❌ Action Required - Your new code coverage is below 90%. Please add more unit tests for the changed/added code before this PR can be merged.' || '' }}
             
-            ${{ env.COVERAGE_DECREASED == 'true' && '### ❌ Action Required\nOverall coverage has decreased. Please add tests to restore or improve coverage levels.' || '' }}
+            ${{ env.COVERAGE_DECREASED == 'true' && '### ❌ Action Required - Overall coverage has decreased. Please add tests to restore or improve coverage levels.' || '' }}
             
             ### 📥 Download Reports
             - [HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
