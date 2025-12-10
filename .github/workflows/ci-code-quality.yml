@@ -25,6 +25,7 @@ jobs:
           php-version: '8.1'
           extensions: mbstring, xml, ctype, iconv, intl, pdo, pdo_mysql, dom, filter, gd, json, bcmath, zip
           tools: composer:v2
+          coverage: pcov  # Enable PCOV for coverage
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-progress --optimize-autoloader
@@ -37,7 +38,7 @@ jobs:
           mkdir -p coverage
           
           echo "Running PHPUnit with coverage..."
-          phpdbg -qrr vendor/bin/phpunit \
+          vendor/bin/phpunit \
             --coverage-clover=coverage/clover.xml \
             --coverage-html=coverage/html \
             --coverage-text \
@@ -104,7 +105,7 @@ jobs:
           composer install --prefer-dist --no-progress --optimize-autoloader --quiet || true
           
           # Run tests on main (suppress output)
-          phpdbg -qrr vendor/bin/phpunit \
+          vendor/bin/phpunit \
             --coverage-clover=coverage/baseline-clover.xml \
             --no-logging \
             --colors=never > /dev/null 2>&1 || true
