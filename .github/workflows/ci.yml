@@ -2,7 +2,6 @@ name: CI Test Coverage
 
 on:
   workflow_dispatch:  # Manual trigger only for now
-  pull_request:
 
 permissions:
   contents: read
@@ -93,50 +92,72 @@ jobs:
           fi
 
       # REQUIREMENT 5: Calculate coverage diff (new code only)
-      # Note: This step will be more useful when run on PRs
       - name: Get base branch for comparison
         id: get_base
         run: |
-          # Try to detect base branch from current branch name or use main as default
-          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          echo "current_branch=$CURRENT_BRANCH" >> $GITHUB_OUTPUT
-          
-          # Default to main if not on a feature branch
-          if [[ "$CURRENT_BRANCH" == "main" ]]; then
-            echo "base_branch=main" >> $GITHUB_OUTPUT
-            echo "skip_diff=true" >> $GITHUB_OUTPUT
-          else
-            echo "base_branch=main" >> $GITHUB_OUTPUT
+          # Determine base branch
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            BASE_BRANCH="${{ github.base_ref }}"
+            echo "base_branch=$BASE_BRANCH" >> $GITHUB_OUTPUT
             echo "skip_diff=false" >> $GITHUB_OUTPUT
+            echo "Using PR base branch: $BASE_BRANCH"
+          else
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            echo "current_branch=$CURRENT_BRANCH" >> $GITHUB_OUTPUT
+            
+            if [[ "$CURRENT_BRANCH" == "main" ]]; then
+              echo "base_branch=main" >> $GITHUB_OUTPUT
+              echo "skip_diff=true" >> $GITHUB_OUTPUT
+              echo "On main branch, skipping diff coverage"
+            else
+              echo "base_branch=main" >> $GITHUB_OUTPUT
+              echo "skip_diff=false" >> $GITHUB_OUTPUT
+              echo "Using default base branch: main"
+            fi
           fi
-
-      - name: Install diff-cover tool
-        run: pip install diff-cover
 
       - name: Calculate diff coverage for changed code
         id: diff_coverage
         if: steps.get_base.outputs.skip_diff != 'true'
         continue-on-error: true
         run: |
+          BASE_BRANCH="${{ steps.get_base.outputs.base_branch }}"
+          
           # Fetch the base branch
-          git fetch origin ${{ steps.get_base.outputs.base_branch }} || true
+          echo "Fetching base branch: $BASE_BRANCH"
+          git fetch origin $BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH || true
           
-          # Generate diff coverage report
-          diff-cover coverage/clover.xml \
-            --compare-branch=origin/${{ steps.get_base.outputs.base_branch }} \
-            --html-report=coverage/diff-coverage.html \
-            --json-report=coverage/diff-coverage.json \
-            --fail-under=90 || echo "DIFF_FAILED=true" >> $GITHUB_ENV
+          # Use custom PHP script to calculate diff coverage
+          echo "=== Calculating diff coverage using custom script ==="
+          php tools/calculate-diff-coverage.php coverage/clover.xml origin/$BASE_BRANCH 90 > /tmp/diff_output.txt 2>&1 || echo "DIFF_FAILED=true" >> $GITHUB_ENV
           
-          # Extract diff coverage percentage
-          if [ -f coverage/diff-coverage.json ]; then
-            DIFF_COV=$(cat coverage/diff-coverage.json | jq -r '.total_percent_covered // 0')
-            echo "diff_coverage_pct=$DIFF_COV" >> $GITHUB_OUTPUT
-            echo "Diff coverage: $DIFF_COV%"
-          else
-            echo "diff_coverage_pct=N/A" >> $GITHUB_OUTPUT
-            echo "Could not calculate diff coverage"
-          fi
+          # Extract just the percentage from last line
+          DIFF_COV=$(tail -n 1 /tmp/diff_output.txt)
+          echo "diff_coverage_pct=$DIFF_COV" >> $GITHUB_OUTPUT
+          
+          # Show full output
+          cat /tmp/diff_output.txt
+          
+          # Create simple HTML report
+          cat > coverage/diff-coverage.html << EOF
+          <!DOCTYPE html>
+          <html>
+          <head>
+              <title>Diff Coverage Report</title>
+              <style>
+                  body { font-family: Arial, sans-serif; margin: 20px; }
+                  .pass { color: green; font-weight: bold; }
+                  .fail { color: red; font-weight: bold; }
+                  pre { background: #f4f4f4; padding: 10px; border-radius: 5px; }
+              </style>
+          </head>
+          <body>
+              <h1>Diff Coverage Report</h1>
+              <h2>Coverage: ${DIFF_COV}%</h2>
+              <pre>$(cat /tmp/diff_output.txt)</pre>
+          </body>
+          </html>
+          EOF
 
       - name: Upload diff coverage report
         uses: actions/upload-artifact@v4
@@ -157,35 +178,71 @@ jobs:
           fi
           echo "✅ Diff coverage is $DIFF_COV% (threshold: 90%)"
 
+      # Post coverage comment on PR
+      - name: Comment coverage results on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request' && always()
+        with:
+          header: coverage
+          message: |
+            ## 📊 Coverage Report
+            
+            **Global Coverage:** ${{ steps.check_coverage.outputs.coverage }}% 
+            ${{ env.GLOBAL_COVERAGE_LOW == 'true' && '⚠️ *Below 80% threshold (WARNING ONLY)*' || '✅ *Meets 80% threshold*' }}
+            
+            **Diff Coverage (new code):** ${{ steps.diff_coverage.outputs.diff_coverage_pct }}% 
+            ${{ env.DIFF_COVERAGE_FAILED == 'true' && '❌ **Below 90% threshold - BLOCKING MERGE**' || '✅ **Meets 90% threshold**' }}
+            
+            ---
+            
+            ### 📋 Coverage Rules
+            - **Global Coverage < 80%**: ⚠️ Warning only (does not block merge)
+            - **Diff Coverage < 90%**: ❌ **BLOCKS MERGE** (must be fixed)
+            
+            ${{ env.DIFF_COVERAGE_FAILED == 'true' && '### ❌ Action Required\nYour new code coverage is below 90%. Please add more unit tests for the changed/added code before this PR can be merged.' || '' }}
+            
+            ### 📥 Download Reports
+            - [HTML Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [Diff Coverage Report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            ---
+            *Coverage reports are available in the workflow artifacts for 30 days*
+
       # REQUIREMENT 2: Set PR status check (prevents merge if failed)
-      - name: Set status check - Test Coverage Gate
+      - name: Set PR status check - Test Coverage Gate
         if: always()
         uses: actions/github-script@v6
         with:
           script: |
             const globalCoverage = '${{ steps.check_coverage.outputs.coverage }}';
             const diffCoverage = '${{ steps.diff_coverage.outputs.diff_coverage_pct }}';
-            const coverageFailed = process.env.COVERAGE_FAILED === 'true';
+            const globalCoverageLow = process.env.GLOBAL_COVERAGE_LOW === 'true';
+            const diffCoverageFailed = process.env.DIFF_COVERAGE_FAILED === 'true';
             const testsFailed = '${{ steps.phpunit.outcome }}' !== 'success';
             const skipDiff = '${{ steps.get_base.outputs.skip_diff }}' === 'true';
             
             let conclusion = 'success';
-            let summary = '✅ All coverage thresholds met';
+            let summary = '';
+            let details = '';
             
             if (testsFailed) {
               conclusion = 'failure';
               summary = '❌ Unit tests failed';
-            } else if (coverageFailed) {
+              details = 'Some unit tests are failing. Please fix the failing tests before merge.';
+            } else if (diffCoverageFailed) {
               conclusion = 'failure';
-              summary = `❌ Coverage thresholds NOT met\n\nGlobal: ${globalCoverage}% (min: 80%)`;
-              if (!skipDiff && diffCoverage !== 'N/A') {
-                summary += `\nDiff: ${diffCoverage}% (min: 90%)`;
-              }
+              summary = `❌ Diff coverage below 90% threshold - BLOCKING MERGE`;
+              details = `New/changed code coverage: ${diffCoverage}% (required: 90%)\n\n`;
+              details += `Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% - warning only)' : '(✅ meets 80%)'}\n\n`;
+              details += 'Please add unit tests for your new/changed code to reach 90% coverage.';
             } else {
-              summary = `✅ Coverage thresholds met\n\nGlobal: ${globalCoverage}% (min: 80%)`;
+              conclusion = 'success';
+              summary = '✅ Coverage requirements met';
+              details = `Global coverage: ${globalCoverage}% ${globalCoverageLow ? '(⚠️ below 80% threshold - warning only)' : '(✅ meets 80% threshold)'}\n`;
               if (!skipDiff && diffCoverage !== 'N/A') {
-                summary += `\nDiff: ${diffCoverage}% (min: 90%)`;
+                details += `Diff coverage: ${diffCoverage}% (✅ meets 90% threshold)\n`;
               }
+              details += '\nAll coverage checks passed. PR can be merged.';
             }
             
             await github.rest.checks.create({
@@ -198,9 +255,7 @@ jobs:
               output: {
                 title: 'Test Coverage Check',
                 summary: summary,
-                text: conclusion === 'success' 
-                  ? 'All tests passed and coverage thresholds met.' 
-                  : 'Coverage thresholds not met or tests failed. Please add more tests.'
+                text: details
               }
             });
 
