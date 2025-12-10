@@ -270,7 +270,7 @@ function main($argv) {
     
     if (empty($changedLines)) {
         echo COLOR_YELLOW . "⚠️  No PHP files changed or no diff found" . COLOR_RESET . "\n";
-        echo "N/A\\n";
+        echo "N/A\n";
         exit(0);
     }
     
