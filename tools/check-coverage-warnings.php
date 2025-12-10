@@ -82,7 +82,7 @@ function isCriticalFile($filename) {
  * Get changed files from git diff
  */
 function getChangedFiles($baseBranch) {
-    $command = "git diff --name-only origin/{$baseBranch}...HEAD";
+    $command = "git diff --name-only origin/" . escapeshellarg($baseBranch) . "...HEAD";
     exec($command, $output, $returnCode);
     
     if ($returnCode !== 0) {
@@ -98,7 +98,7 @@ function getChangedFiles($baseBranch) {
  * Get PR size (lines added + removed)
  */
 function getPRSize($baseBranch) {
-    $command = "git diff --shortstat origin/{$baseBranch}...HEAD";
+    $command = "git diff --shortstat origin/" . escapeshellarg($baseBranch) . "...HEAD";
     exec($command, $output, $returnCode);
     
     if ($returnCode !== 0 || empty($output)) {
@@ -125,7 +125,7 @@ function getPRSize($baseBranch) {
  * Count test files changed
  */
 function getTestFilesChanged($baseBranch) {
-    $command = "git diff --name-only origin/{$baseBranch}...HEAD | grep -i test | wc -l";
+    $command = "git diff --name-only origin/" . escapeshellarg($baseBranch) . "...HEAD | grep -i test | wc -l";
     exec($command, $output, $returnCode);
     
     return $returnCode === 0 && !empty($output) ? (int) $output[0] : 0;
@@ -165,7 +165,7 @@ function getNewPublicMethods($baseBranch, $changedFiles) {
         }
         
         // Get diff for this file
-        $command = "git diff origin/{$baseBranch}...HEAD -- " . escapeshellarg($file);
+        $command = "git diff origin/" . escapeshellarg($baseBranch) . "...HEAD -- " . escapeshellarg($file);
         exec($command, $diffOutput);
         
         $diffContent = implode("\n", $diffOutput);

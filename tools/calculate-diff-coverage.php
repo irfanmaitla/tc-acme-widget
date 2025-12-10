@@ -52,7 +52,7 @@ function getChangedLines($baseBranch) {
     echo COLOR_BLUE . "📊 Analyzing git diff..." . COLOR_RESET . "\n";
     
     // Get diff with line numbers
-    $diffCommand = "git diff {$baseBranch}...HEAD --unified=0";
+    $diffCommand = "git diff " . escapeshellarg($baseBranch) . "...HEAD --unified=0";
     exec($diffCommand, $diffOutput, $returnCode);
     
     if ($returnCode !== 0) {
