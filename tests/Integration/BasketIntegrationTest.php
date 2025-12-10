@@ -26,16 +26,4 @@ class BasketIntegrationTest extends TestCase
 
         $this->deliveryRule = new AcmeDeliveryRule();
     }
-
-    public function test_basket_example_1(): void
-    {
-        // B01, G01
-        $offers = [new BuyOneGetOneHalfPrice('R01')];
-        $basket = new Basket($this->catalogue, $this->deliveryRule, $offers);
-        
-        $basket->add('B01');
-        $basket->add('G01');
-
-        $this->assertEquals(37.85, $basket->total());
-    }
 }

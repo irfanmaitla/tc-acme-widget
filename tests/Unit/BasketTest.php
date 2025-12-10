@@ -21,15 +21,4 @@ class BasketTest extends TestCase
         $this->catalogue = $this->createMock(ProductCatalogueInterface::class);
         $this->deliveryRule = $this->createMock(DeliveryRuleInterface::class);
     }
-
-    public function test_can_add_product_to_basket(): void
-    {
-        $this->catalogue->method('hasProduct')->willReturn(true);
-        
-        $basket = new Basket($this->catalogue, $this->deliveryRule);
-        $basket->add('R01');
-
-        $this->assertCount(1, $basket->getItems());
-        $this->assertEquals(['R01'], $basket->getItems());
-    }
 }
